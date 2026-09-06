@@ -35,7 +35,12 @@
         this.distanceMeter = null;
         this.distanceRan = 0;
 
-        this.highestScore = 0;
+        var savedHighScore = 0;
+        try {
+            var stored = localStorage.getItem('runner-highscore');
+            if (stored) { savedHighScore = parseInt(stored, 10) || 0; }
+        } catch (e) { /* localStorage unavailable */ }
+        this.highestScore = savedHighScore;
 
         this.time = 0;
         this.runningTime = 0;
@@ -58,8 +63,12 @@
         this.coinScore = -1;
 
         // Sound FX.
-        this.audioBuffer = null;
         this.soundFx = {};
+
+        // Bound handler for visibility/blur/focus listeners (reused to avoid leaks).
+        this.boundVisibilityHandler = null;
+        // Intro style element ref (replaced on restart to avoid DOM accumulation).
+        this.introStyleEl = null;
 
         // Global web audio context for playing sounds.
         this.audioContext = null;
@@ -147,6 +156,22 @@
 
 
     /**
+     * Audio configuration.
+     * @enum {number}
+     */
+    Runner.audioConfig = {
+        BGM_VOLUME: 0.3,
+        END_BGM_VOLUME: 0.3,
+        START_VOLUME: 0.25,
+        QIAOLEZI_VOLUME: 0.625,
+        POOL_VOLUME: 0.75,
+        POOL_FIRST_DELAY: 10000,
+        POOL_INTERVAL_DELAY: 30000,
+        POOL_RANDOM_DELAY: 30000
+    };
+
+
+    /**
      * Default dimensions.
      * @enum {string}
      */
@@ -166,7 +191,7 @@
         CONTAINER: 'runner-container',
         CRASHED: 'crashed',
         ICON: 'icon-offline',
-        INVERTED: 'inverted',
+
         SNACKBAR: 'snackbar',
         SNACKBAR_SHOW: 'snackbar-show',
         TOUCH_CONTROLLER: 'controller'
@@ -321,6 +346,22 @@
                 // If the images are not yet loaded, add a listener.
                 Runner.imageSprite.addEventListener(Runner.events.LOAD,
                     this.init.bind(this));
+                // Handle load failure so the game doesn't silently hang.
+                Runner.imageSprite.addEventListener('error',
+                    this.onImageLoadError.bind(this));
+            }
+        },
+
+        /**
+         * Called when the sprite sheet fails to load.
+         */
+        onImageLoadError: function () {
+            var msg = document.getElementById('messageBox');
+            if (msg) {
+                var h1 = msg.querySelector('h1');
+                if (h1) {
+                    h1.textContent = 'Failed to load game assets. Please refresh.';
+                }
             }
         },
 
@@ -393,7 +434,8 @@
 
             this.canvasCtx = this.canvas.getContext('2d');
             this.canvasCtx.fillStyle = '#f7f7f7';
-            this.canvasCtx.fill();
+            this.canvasCtx.fillRect(0, 0, this.dimensions.WIDTH,
+                this.dimensions.HEIGHT);
             Runner.updateCanvasScaling(this.canvas);
 
             // Horizon contains clouds, obstacles and the ground.
@@ -501,21 +543,21 @@
                     'to { width: ' + this.dimensions.WIDTH + 'px }' +
                     '}';
                 
-                // create a style sheet to put the keyframe rule in 
-                // and then place the style sheet in the html head    
-                var sheet = document.createElement('style');
-                sheet.innerHTML = keyframes;
-                document.head.appendChild(sheet);
+                // create a style sheet to put the keyframe rule in
+                // and then place the style sheet in the html head
+                // Replace old intro style to avoid DOM accumulation on restart.
+                if (this.introStyleEl) {
+                    document.head.removeChild(this.introStyleEl);
+                }
+                this.introStyleEl = document.createElement('style');
+                this.introStyleEl.innerHTML = keyframes;
+                document.head.appendChild(this.introStyleEl);
 
                 this.containerEl.addEventListener(Runner.events.ANIM_END,
-                    this.startGame.bind(this));
+                    this.startGame.bind(this), { once: true });
 
                 this.containerEl.style.webkitAnimation = 'intro .4s ease-out 1 both';
                 this.containerEl.style.width = this.dimensions.WIDTH + 'px';
-
-                // if (this.touchController) {
-                //     this.outerContainerEl.appendChild(this.touchController);
-                // }
                 this.playing = true;
                 this.activated = true;
             } else if (this.crashed) {
@@ -536,14 +578,22 @@
             this.playCount++;
 
             // Handle tabbing off the page. Pause the current game.
+            // Remove previous handlers and re-create a single bound reference to avoid leaks.
+            if (this.boundVisibilityHandler) {
+                document.removeEventListener(Runner.events.VISIBILITY,
+                    this.boundVisibilityHandler);
+                window.removeEventListener(Runner.events.BLUR,
+                    this.boundVisibilityHandler);
+                window.removeEventListener(Runner.events.FOCUS,
+                    this.boundVisibilityHandler);
+            }
+            this.boundVisibilityHandler = this.onVisibilityChange.bind(this);
             document.addEventListener(Runner.events.VISIBILITY,
-                this.onVisibilityChange.bind(this));
-
+                this.boundVisibilityHandler);
             window.addEventListener(Runner.events.BLUR,
-                this.onVisibilityChange.bind(this));
-
+                this.boundVisibilityHandler);
             window.addEventListener(Runner.events.FOCUS,
-                this.onVisibilityChange.bind(this));
+                this.boundVisibilityHandler);
 
             this.playStartSound();
             this.playBgm();
@@ -616,7 +666,7 @@
                             coin.remove = true;
                             this.distanceRan += 200;
                             this.coinScore++;
-                            if (this.coinScore === 0 /* || this.coinScore % 3 === 0 */) {
+                            if (this.coinScore === 0) {
                                 this.playQiaoleziSound();
                             }
                         }
@@ -854,6 +904,7 @@
             if (this.distanceRan > this.highestScore) {
                 this.highestScore = Math.ceil(this.distanceRan);
                 this.distanceMeter.setHighScore(this.highestScore);
+                try { localStorage.setItem('runner-highscore', String(this.highestScore)); } catch (e) {}
             }
 
             // Reset the time clock.
@@ -943,7 +994,13 @@
                 this.stopBgm();
                 this.stopEndBgm();
                 this.stopSoundPool();
+                if (this.audioContext && this.audioContext.state === 'running') {
+                    this.audioContext.suspend();
+                }
             } else if (!this.crashed) {
+                if (this.audioContext && this.audioContext.state === 'suspended') {
+                    this.audioContext.resume();
+                }
                 this.tRex.reset();
                 this.play();
                 if (this.playing) {
@@ -970,7 +1027,7 @@
 
         playBgm: function () {
             if (this.bgmAudio && this.bgmAudio.paused) {
-                this.bgmAudio.volume = 0.3;
+                this.bgmAudio.volume = Runner.audioConfig.BGM_VOLUME;
                 var playPromise = this.bgmAudio.play();
                 if (playPromise !== undefined) {
                     playPromise.catch(function () {});
@@ -987,8 +1044,9 @@
 
         playEndBgm: function () {
             if (this.endBgmAudio && this.endBgmAudio.paused) {
-                setTimeout(function () {
-                    this.endBgmAudio.volume = 0.3;
+                this.endBgmTimerId = setTimeout(function () {
+                    this.endBgmAudio.volume = Runner.audioConfig.END_BGM_VOLUME;
+                    this.endBgmTimerId = null;
                     var playPromise = this.endBgmAudio.play();
                     if (playPromise !== undefined) {
                         playPromise.catch(function () {});
@@ -1008,6 +1066,14 @@
             this.stopBgm();
             this.stopEndBgm();
             this.stopSoundPool();
+            if (this.endBgmTimerId) {
+                clearTimeout(this.endBgmTimerId);
+                this.endBgmTimerId = null;
+            }
+            if (this.startAudioTimerId) {
+                clearTimeout(this.startAudioTimerId);
+                this.startAudioTimerId = null;
+            }
             if (this.startAudio) {
                 this.startAudio.pause();
                 this.startAudio.currentTime = 0;
@@ -1028,9 +1094,10 @@
 
         playStartSound: function () {
             if (this.startAudio) {
-                setTimeout(function () {
+                this.startAudioTimerId = setTimeout(function () {
                     this.startAudio.currentTime = 0;
-                    this.startAudio.volume = 0.25;
+                    this.startAudio.volume = Runner.audioConfig.START_VOLUME;
+                    this.startAudioTimerId = null;
                     var playPromise = this.startAudio.play();
                     if (playPromise !== undefined) {
                         playPromise.catch(function () {});
@@ -1040,9 +1107,9 @@
         },
 
         playQiaoleziSound: function () {
-            if (this.qiaoleziAudio) {
+            if (this.qiaoleziAudio && this.qiaoleziAudio.paused) {
                 this.qiaoleziAudio.currentTime = 0;
-                this.qiaoleziAudio.volume = 0.625;
+                this.qiaoleziAudio.volume = Runner.audioConfig.QIAOLEZI_VOLUME;
                 var playPromise = this.qiaoleziAudio.play();
                 if (playPromise !== undefined) {
                     playPromise.catch(function () {});
@@ -1053,18 +1120,21 @@
         startSoundPool: function () {
             if (this.soundPoolStarted) return;
             this.soundPoolStarted = true;
-            this.scheduleNextSoundPool(10000);
+            this.scheduleNextSoundPool(true);
         },
 
-        scheduleNextSoundPool: function (delay) {
+        scheduleNextSoundPool: function (isFirst) {
             var self = this;
-            var randomDelay = delay + Math.random() * 30000;
+            var baseDelay = isFirst ? Runner.audioConfig.POOL_FIRST_DELAY : Runner.audioConfig.POOL_INTERVAL_DELAY;
+            var randomDelay = Math.random() * Runner.audioConfig.POOL_RANDOM_DELAY;
+            var totalDelay = baseDelay + randomDelay;
+            
             this.soundPoolTimer = setTimeout(function () {
                 if (self.playing && !self.crashed) {
                     self.playRandomSoundFromPool();
                 }
-                self.scheduleNextSoundPool(0);
-            }, randomDelay);
+                self.scheduleNextSoundPool(false);
+            }, totalDelay);
         },
 
         stopSoundPool: function () {
@@ -1106,9 +1176,9 @@
                 }
             }
 
-            if (selected.audio) {
+            if (selected.audio && selected.audio.paused) {
                 selected.audio.currentTime = 0;
-                selected.audio.volume = 0.75;
+                selected.audio.volume = Runner.audioConfig.POOL_VOLUME;
                 var playPromise = selected.audio.play();
                 if (playPromise !== undefined) {
                     playPromise.catch(function () {});
@@ -1122,12 +1192,10 @@
          */
         invert: function (reset) {
             if (reset) {
-                document.body.classList.toggle(Runner.classes.INVERTED, false);
                 this.invertTimer = 0;
                 this.inverted = false;
             } else {
-                this.inverted = document.body.classList.toggle(Runner.classes.INVERTED,
-                    this.invertTrigger);
+                this.inverted = this.invertTrigger;
             }
         }
     };
@@ -1357,8 +1425,6 @@
      * @return {Array<CollisionBox>}
      */
     function checkForCollision(obstacle, tRex, opt_canvasCtx) {
-        var obstacleBoxXPos = Runner.defaultDimensions.WIDTH + obstacle.xPos;
-
         // Adjustments are made to the bounding box as there is a 1 pixel white
         // border around the t-rex and obstacles.
         var tRexBox = new CollisionBox(
@@ -2322,7 +2388,7 @@
                 if (distance > this.maxScore && this.maxScoreUnits ==
                     this.config.MAX_DISTANCE_UNITS) {
                     this.maxScoreUnits++;
-                    this.maxScore = parseInt(this.maxScore + '9');
+                    this.maxScore = this.maxScore * 10 + 9;
                 } else {
                     this.distance = 0;
                 }
@@ -2365,7 +2431,7 @@
             // Draw the digits if not flashing.
             if (paint) {
                 for (var i = this.digits.length - 1; i >= 0; i--) {
-                    this.draw(i, parseInt(this.digits[i]));
+                    this.draw(i, parseInt(this.digits[i], 10));
                 }
             }
 
@@ -2905,18 +2971,12 @@
          */
         updateObstacles: function (deltaTime, currentSpeed) {
             // Obstacles, move to Horizon layer.
-            var updatedObstacles = this.obstacles.slice(0);
-
-            for (var i = 0; i < this.obstacles.length; i++) {
-                var obstacle = this.obstacles[i];
+            // Use filter to safely remove obstacles at any index.
+            var self = this;
+            this.obstacles = this.obstacles.filter(function (obstacle) {
                 obstacle.update(deltaTime, currentSpeed);
-
-                // Clean up existing obstacles.
-                if (obstacle.remove) {
-                    updatedObstacles.shift();
-                }
-            }
-            this.obstacles = updatedObstacles;
+                return !obstacle.remove;
+            });
 
             if (this.obstacles.length > 0) {
                 var lastObstacle = this.obstacles[this.obstacles.length - 1];
@@ -2949,10 +3009,10 @@
             }
             var lastCoin = this.coins.length > 0 ? this.coins[this.coins.length - 1] : null;
             if (!lastCoin || lastCoin.xPos < this.coinSpawnAt) {
-                if (Math.random() < 0.01) {
+                if (Math.random() < 0.03) {
                     this.coins.push(new Coin(this.canvasCtx,
                         this.spritePos.COIN, this.dimensions, currentSpeed));
-                    this.coinSpawnAt = getRandomNum(-3000, -200);
+                    this.coinSpawnAt = getRandomNum(-1500, -200);
                 }
             }
         },
@@ -2966,26 +3026,39 @@
          * @param {number} currentSpeed
          */
         addNewObstacle: function (currentSpeed) {
-            var obstacleTypeIndex = getRandomNum(0, Obstacle.types.length - 1);
-            var obstacleType = Obstacle.types[obstacleTypeIndex];
-
-            // Check for multiples of the same type of obstacle.
-            // Also check obstacle is available at current speed.
-            if (this.duplicateObstacleCheck(obstacleType.type) ||
-                currentSpeed < obstacleType.minSpeed) {
-                this.addNewObstacle(currentSpeed);
-            } else {
-                var obstacleSpritePos = this.spritePos[obstacleType.type];
-
-                this.obstacles.push(new Obstacle(this.canvasCtx, obstacleType,
-                    obstacleSpritePos, this.dimensions,
-                    this.gapCoefficient, currentSpeed, obstacleType.width));
-
-                this.obstacleHistory.unshift(obstacleType.type);
-
-                if (this.obstacleHistory.length > 1) {
-                    this.obstacleHistory.splice(Runner.config.MAX_OBSTACLE_DUPLICATION);
+            // Build a list of eligible obstacle types. Reshuffle on each retry
+            // to avoid bias, but cap retries so we never recurse into a stack overflow.
+            var eligible = [];
+            for (var t = 0; t < Obstacle.types.length; t++) {
+                var candidate = Obstacle.types[t];
+                if (currentSpeed >= candidate.minSpeed &&
+                    !this.duplicateObstacleCheck(candidate.type)) {
+                    eligible.push(candidate);
                 }
+            }
+
+            // Fallback: if nothing is eligible, pick the type with the lowest minSpeed.
+            if (eligible.length === 0) {
+                var fallback = Obstacle.types[0];
+                for (var f = 1; f < Obstacle.types.length; f++) {
+                    if (Obstacle.types[f].minSpeed < fallback.minSpeed) {
+                        fallback = Obstacle.types[f];
+                    }
+                }
+                eligible.push(fallback);
+            }
+
+            var obstacleType = eligible[getRandomNum(0, eligible.length - 1)];
+            var obstacleSpritePos = this.spritePos[obstacleType.type];
+
+            this.obstacles.push(new Obstacle(this.canvasCtx, obstacleType,
+                obstacleSpritePos, this.dimensions,
+                this.gapCoefficient, currentSpeed, obstacleType.width));
+
+            this.obstacleHistory.unshift(obstacleType.type);
+
+            if (this.obstacleHistory.length > 1) {
+                this.obstacleHistory.splice(Runner.config.MAX_OBSTACLE_DUPLICATION);
             }
         },
 
