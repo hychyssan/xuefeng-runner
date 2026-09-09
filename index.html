@@ -13,7 +13,7 @@
 <body id="t" class="offline">
     <div id="messageBox" class="sendmessage">
          <h1 style="text-align: center;font-family: 'Open Sans', sans-serif;">Press Space to start</h1>
-         <div class="niokbutton" onclick="okbuttonsend()"></div>
+
     </div>
     <div id="main-frame-error" class="interstitial-wrapper">
         <div id="main-content">
@@ -28,18 +28,18 @@
             </template>
         </div>
     </div>
-    <audio id="bgm-audio" src="assets/music/bgm.mp3" loop preload="auto"></audio>
-    <audio id="end-bgm-audio" src="assets/music/end-bgm.mp3" loop preload="auto"></audio>
-    <audio id="start-audio" src="assets/music/start.mp3" preload="auto"></audio>
-    <audio id="qiaolezi-audio" src="assets/music/Qiaolezi.mp3" preload="auto"></audio>
-    <audio id="fate-audio" src="assets/music/sound/fate.mp3" preload="auto"></audio>
-    <audio id="run-audio" src="assets/music/sound/run.mp3" preload="auto"></audio>
+    <audio id="bgm-audio" src="assets/music/bgm.mp3" loop preload="metadata"></audio>
+    <audio id="end-bgm-audio" src="assets/music/end-bgm.mp3" loop preload="metadata"></audio>
+    <audio id="start-audio" src="assets/music/start.mp3" preload="metadata"></audio>
+    <audio id="qiaolezi-audio" src="assets/music/Qiaolezi.mp3" preload="none"></audio>
+    <audio id="fate-audio" src="assets/music/sound/fate.mp3" preload="none"></audio>
+    <audio id="run-audio" src="assets/music/sound/run.mp3" preload="none"></audio>
 </body>
 
 <script>
     document.onkeydown = function(evt) {
     evt = evt || window.event;
-    if (evt.keyCode == 32) {
+    if (evt.code === 'Space') {
         var box = document.getElementById("messageBox");
         box.style.visibility="hidden";
     }
